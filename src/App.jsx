@@ -186,26 +186,79 @@ function shuffle(arr) {
   return a;
 }
 
+const LS = { SETTINGS: 'bhvt-settings', WRONG: 'bhvt-wrong-ids', STATS: 'bhvt-section-stats' };
+const DEFAULT_SETTINGS = { selectedSection: 'all', mode: 'practice', doShuffle: true, questionLimit: 'all' };
+const DEFAULT_STATS = { 1: { a: 0, c: 0 }, 2: { a: 0, c: 0 }, 3: { a: 0, c: 0 }, 4: { a: 0, c: 0 } };
+const VALID_SECTIONS = ['all', '1', '2', '3', '4'];
+const VALID_MODES = ['practice', 'exam'];
+const VALID_LIMITS = ['10', '20', '50', 'all'];
+
+function useLocalStorageState(key, defaultValue) {
+  const [state, setState] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw == null) return defaultValue;
+      const parsed = JSON.parse(raw);
+      if (defaultValue && typeof defaultValue === 'object' && !Array.isArray(defaultValue)) {
+        return { ...defaultValue, ...parsed };
+      }
+      return parsed;
+    } catch {
+      return defaultValue;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch {}
+  }, [key, state]);
+  return [state, setState];
+}
+
 export default function App() {
   const [screen, setScreen] = useState('menu'); // menu, quiz, results
-  const [selectedSection, setSelectedSection] = useState('all');
-  const [mode, setMode] = useState('practice'); // practice, exam
-  const [doShuffle, setDoShuffle] = useState(true);
-  const [questionLimit, setQuestionLimit] = useState('all');
+  const [settings, setSettings] = useLocalStorageState(LS.SETTINGS, DEFAULT_SETTINGS);
+  const selectedSection = VALID_SECTIONS.includes(settings.selectedSection) ? settings.selectedSection : 'all';
+  const mode = VALID_MODES.includes(settings.mode) ? settings.mode : 'practice';
+  const doShuffle = typeof settings.doShuffle === 'boolean' ? settings.doShuffle : true;
+  const questionLimit = VALID_LIMITS.includes(settings.questionLimit) ? settings.questionLimit : 'all';
+  const patchSettings = (p) => setSettings(s => ({ ...s, ...p }));
+  const setSelectedSection = v => patchSettings({ selectedSection: v });
+  const setMode = v => patchSettings({ mode: v });
+  const setDoShuffle = v => patchSettings({ doShuffle: v });
+  const setQuestionLimit = v => patchSettings({ questionLimit: v });
+  const [wrongIds, setWrongIds] = useLocalStorageState(LS.WRONG, []);
+  const [sectionStats, setSectionStats] = useLocalStorageState(LS.STATS, DEFAULT_STATS);
+  const [reviewMode, setReviewMode] = useState(false);
+  const [examSimActive, setExamSimActive] = useState(false);
+  const effectiveMode = examSimActive ? 'exam' : mode;
   const [quizQuestions, setQuizQuestions] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [selected, setSelected] = useState([]);
   const [submitted, setSubmitted] = useState(false);
   const [results, setResults] = useState([]); // {question, selected, correct, points}
 
-  const startQuiz = () => {
-    let pool = selectedSection === 'all'
-      ? [...QUESTIONS]
-      : QUESTIONS.filter(q => q.s === Number(selectedSection));
+  useEffect(() => {
+    setWrongIds(ids => ids.filter(n => QUESTIONS.some(q => q.n === n)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startQuiz = (review = false) => {
+    let pool;
+    if (review) {
+      pool = QUESTIONS.filter(q => wrongIds.includes(q.n));
+      if (pool.length === 0) return;
+    } else {
+      pool = selectedSection === 'all'
+        ? [...QUESTIONS]
+        : QUESTIONS.filter(q => q.s === Number(selectedSection));
+    }
     if (doShuffle) pool = shuffle(pool);
-    if (questionLimit !== 'all') {
+    if (!review && questionLimit !== 'all') {
       pool = pool.slice(0, Number(questionLimit));
     }
+    setReviewMode(review);
+    setExamSimActive(false);
     setQuizQuestions(pool);
     setCurrentIdx(0);
     setSelected([]);
@@ -217,11 +270,9 @@ export default function App() {
   // Simulates a real BH/VT exam: 20 questions from all sections, exam mode, shuffled.
   // Per SV: 20 questions, +2/-2 scoring, 70% to pass.
   const startExamSimulation = () => {
-    setSelectedSection('all');
-    setMode('exam');
-    setDoShuffle(true);
-    setQuestionLimit('20');
     const pool = shuffle([...QUESTIONS]).slice(0, 20);
+    setReviewMode(false);
+    setExamSimActive(true);
     setQuizQuestions(pool);
     setCurrentIdx(0);
     setSelected([]);
@@ -249,7 +300,21 @@ export default function App() {
     const newResult = { question: q, selected: [...selected], isCorrect, points };
     setResults(prev => [...prev, newResult]);
 
-    if (mode === 'practice') {
+    setSectionStats(s => {
+      const prev = s[q.s] || { a: 0, c: 0 };
+      return { ...s, [q.s]: { a: prev.a + 1, c: prev.c + (isCorrect ? 1 : 0) } };
+    });
+    setWrongIds(ids => {
+      const set = new Set(ids);
+      if (reviewMode) {
+        if (isCorrect) set.delete(q.n);
+      } else if (!isCorrect) {
+        set.add(q.n);
+      }
+      return [...set];
+    });
+
+    if (effectiveMode === 'practice') {
       setSubmitted(true);
     } else {
       nextQuestion([...results, newResult]);
@@ -273,6 +338,8 @@ export default function App() {
     setCurrentIdx(0);
     setSelected([]);
     setSubmitted(false);
+    setReviewMode(false);
+    setExamSimActive(false);
   };
 
   // ---------- MENU SCREEN ----------
@@ -319,6 +386,36 @@ export default function App() {
             </div>
           </button>
 
+          {/* Fehlerfragen - review mode */}
+          <button
+            onClick={() => startQuiz(true)}
+            disabled={wrongIds.length === 0}
+            className={`w-full rounded-2xl p-5 mb-4 shadow-lg transition-all text-left ${
+              wrongIds.length === 0
+                ? 'bg-stone-200 text-stone-500 cursor-not-allowed'
+                : 'bg-gradient-to-br from-rose-500 via-rose-600 to-pink-600 text-white shadow-rose-500/25 hover:shadow-xl active:scale-[0.99]'
+            }`}
+          >
+            <div className="flex items-center gap-4">
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                wrongIds.length === 0 ? 'bg-stone-300' : 'bg-white/20 backdrop-blur'
+              }`}>
+                <RotateCcw className="w-7 h-7" />
+              </div>
+              <div className="flex-1">
+                <div className="font-bold text-lg leading-tight">Fehlerfragen üben</div>
+                <div className={`text-sm mt-0.5 ${
+                  wrongIds.length === 0 ? 'text-stone-500' : 'text-rose-50/90'
+                }`}>
+                  {wrongIds.length === 0
+                    ? 'Keine Fehler gemerkt — alles richtig!'
+                    : `${wrongIds.length} ${wrongIds.length === 1 ? 'Frage' : 'Fragen'} zum Wiederholen`}
+                </div>
+              </div>
+              {wrongIds.length > 0 && <ChevronRight className="w-5 h-5 flex-shrink-0" />}
+            </div>
+          </button>
+
           {/* Divider with label */}
           <div className="flex items-center gap-3 mb-4 mt-2">
             <div className="flex-1 h-px bg-stone-300"></div>
@@ -356,6 +453,8 @@ export default function App() {
             {Object.entries(SECTIONS).map(([key, sec]) => {
               const Icon = sec.icon;
               const active = selectedSection === key;
+              const stat = sectionStats[key] || { a: 0, c: 0 };
+              const accuracy = stat.a > 0 ? Math.round((stat.c / stat.a) * 100) : null;
               return (
                 <button
                   key={key}
@@ -373,6 +472,15 @@ export default function App() {
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-stone-800">Teil {key}: {sec.short}</div>
                       <div className="text-xs text-stone-500 truncate">{sec.name}</div>
+                      {accuracy !== null ? (
+                        <div className={`text-[11px] mt-0.5 font-medium ${
+                          accuracy >= 70 ? 'text-emerald-600' : accuracy >= 40 ? 'text-amber-600' : 'text-rose-600'
+                        }`}>
+                          {accuracy}% richtig · {stat.a} versucht
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-stone-400 mt-0.5">Noch nicht geübt</div>
+                      )}
                     </div>
                     <span className="text-xs font-semibold bg-stone-100 text-stone-700 px-2.5 py-1 rounded-full flex-shrink-0">
                       {counts[key]}
@@ -455,6 +563,34 @@ export default function App() {
                 ))}
               </div>
             </div>
+            {(wrongIds.length > 0 || Object.values(sectionStats).some(s => s.a > 0)) && (
+              <div className="mt-3 pt-3 border-t border-stone-200 flex flex-col gap-1.5">
+                {wrongIds.length > 0 && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Fehlerliste wirklich leeren? Alle gemerkten falsch beantworteten Fragen werden entfernt.')) {
+                        setWrongIds([]);
+                      }
+                    }}
+                    className="text-xs text-stone-500 hover:text-rose-600 text-left transition-colors"
+                  >
+                    Fehlerliste zurücksetzen ({wrongIds.length})
+                  </button>
+                )}
+                {Object.values(sectionStats).some(s => s.a > 0) && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Statistik wirklich zurücksetzen? Alle Trefferquoten werden auf null gesetzt.')) {
+                        setSectionStats(DEFAULT_STATS);
+                      }
+                    }}
+                    className="text-xs text-stone-500 hover:text-rose-600 text-left transition-colors"
+                  >
+                    Statistik zurücksetzen
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <button
@@ -491,13 +627,18 @@ export default function App() {
       <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-stone-50 to-amber-50 p-4 sm:p-6">
         <div className="max-w-2xl mx-auto">
           {/* Header */}
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 gap-2">
             <button
               onClick={backToMenu}
               className="flex items-center gap-1 text-stone-600 hover:text-stone-800 text-sm font-medium"
             >
               <ArrowLeft className="w-4 h-4" /> Menü
             </button>
+            {reviewMode && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-rose-700 bg-rose-100 border border-rose-200 px-2 py-1 rounded-full">
+                <RotateCcw className="w-3 h-3" /> Fehlerfragen
+              </span>
+            )}
             <div className="text-sm font-semibold text-stone-600">
               {currentIdx + 1} / {quizQuestions.length}
             </div>
@@ -620,7 +761,7 @@ export default function App() {
               disabled={selected.length === 0}
               className="w-full bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 disabled:from-stone-300 disabled:to-stone-300 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-500/25 transition-all active:scale-[0.98]"
             >
-              {mode === 'practice' ? 'Antwort prüfen' : 'Weiter'}
+              {effectiveMode === 'practice' ? 'Antwort prüfen' : 'Weiter'}
             </button>
           ) : (
             <button
