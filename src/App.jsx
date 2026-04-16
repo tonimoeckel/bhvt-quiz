@@ -594,7 +594,7 @@ export default function App() {
           </div>
 
           <button
-            onClick={startQuiz}
+            onClick={() => startQuiz()}
             className="w-full bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl active:scale-[0.98] flex items-center justify-center gap-2"
           >
             Quiz starten
@@ -889,7 +889,7 @@ export default function App() {
               Zum Menü
             </button>
             <button
-              onClick={startQuiz}
+              onClick={() => startQuiz()}
               className="bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-500/25 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
             >
               <RotateCcw className="w-4 h-4" />
